@@ -1,6 +1,7 @@
 {
+  "version": 2,
   "functions": {
-    "api/sms.ts": {
+    "api/**/*.ts": {
       "runtime": "nodejs20.x",
       "memory": 128,
       "maxDuration": 10

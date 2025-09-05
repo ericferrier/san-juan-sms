@@ -1,61 +1,54 @@
 // api/sms.ts
-// Twilio posts application/x-www-form-urlencoded. We parse it, then relay to Telegram.
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-export const config = {
-  runtime: "nodejs18.x",
-};
-
-function twiml(xml: string) {
-  return new Response(xml, {
-    status: 200,
-    headers: { "Content-Type": "application/xml" },
-  });
+function twiml(xml: string, res: VercelResponse) {
+  res.setHeader('Content-Type', 'application/xml');
+  res.status(200).send(xml);
 }
 
-export default async function handler(req: Request) {
-  if (req.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405 });
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).send('Method Not Allowed');
   }
 
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) {
-    return twiml(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+    return twiml(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`, res);
   }
 
-  // Twilio sends x-www-form-urlencoded; parse manually
-  const bodyText = await req.text();
-  const params = new URLSearchParams(bodyText);
+  // Twilio posts application/x-www-form-urlencoded
+  let params: URLSearchParams;
+  if (typeof req.body === 'string') {
+    params = new URLSearchParams(req.body);
+  } else if (req.body && typeof req.body === 'object') {
+    params = new URLSearchParams(Object.entries(req.body).map(([k, v]) => [k, String(v)]));
+  } else {
+    // fallback to raw text
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    params = new URLSearchParams(Buffer.concat(chunks).toString());
+  }
 
-  const from = params.get("From") || "Unknown";
-  const to = params.get("To") || "";
-  const msg = params.get("Body") || "";
+  const from = params.get('From') || 'Unknown';
+  const to = params.get('To') || '';
+  const msg = params.get('Body') || '';
 
   const text = `📩 SMS to ${to}\nFrom: ${from}\n\n${msg}`;
-
   const telegramUrl = `https://api.telegram.org/bot${token}/sendMessage`;
-  const telegramPayload = new URLSearchParams({
-    chat_id: chatId,
-    text,
-    // optional: disable link previews
-    disable_web_page_preview: "true",
-  });
 
-  // Fire-and-forget, but await once to surface errors in logs
   try {
     await fetch(telegramUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: telegramPayload.toString(),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ chat_id: chatId, text, disable_web_page_preview: 'true' }).toString(),
     });
   } catch (e) {
-    // swallow to keep Twilio happy (must respond within ~15s)
-    console.error("Telegram error:", e);
+    console.error('Telegram error:', e);
   }
 
-  // Optional auto-reply to the SMS sender (comment out if not desired)
-  // return twiml(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>Thanks! Delivered to Telegram.</Message></Response>`);
+  // Optional auto-reply:
+  // return twiml(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>Thanks! Delivered to Telegram.</Message></Response>`, res);
 
-  // No SMS reply
-  return twiml(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  return twiml(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`, res);
 }
